@@ -59,9 +59,12 @@ Execution logs and error handling (retries on transient API/SMTP failures, visib
 n8n-epsilon/
 ├── README.md
 ├── docs/
-│   └── architecture.md     # detailed design doc
+│   ├── architecture.md     # detailed design doc
+│   └── test-results.md     # test scenarios and results
 ├── workflows/
-│   └── README.md           # exported n8n workflow JSON (credential-free) goes here
+│   ├── servicenow-incident-monitor.json  # main n8n workflow (credential-free)
+│   ├── error-handler.json                # error workflow
+│   └── README.md           # import + configuration guide
 ├── links.txt               # reference links
 └── .env.example            # variable names only — never real secrets
 ```

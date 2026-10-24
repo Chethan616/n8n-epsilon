@@ -1,0 +1,287 @@
+{
+  "name": "ServiceNow Incident Monitor",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 5
+            }
+          ]
+        }
+      },
+      "id": "n1",
+      "name": "Every 5 Minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "c1",
+              "name": "instanceUrl",
+              "value": "https://dev421307.service-now.com",
+              "type": "string"
+            },
+            {
+              "id": "c2",
+              "name": "recipient",
+              "value": "team@yourdomain.com",
+              "type": "string"
+            },
+            {
+              "id": "c3",
+              "name": "fromEmail",
+              "value": "your-workspace-account@yourdomain.com",
+              "type": "string"
+            },
+            {
+              "id": "c4",
+              "name": "staleHours",
+              "value": 24,
+              "type": "number"
+            },
+            {
+              "id": "c5",
+              "name": "reminderHours",
+              "value": 24,
+              "type": "number"
+            },
+            {
+              "id": "c6",
+              "name": "alertHigh",
+              "value": true,
+              "type": "boolean"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "n2",
+      "name": "Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        220,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ $('Config').first().json.instanceUrl }}/api/now/table/incident",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "sysparm_query",
+              "value": "stateNOT IN6,7,8^ORDERBYDESCsys_updated_on"
+            },
+            {
+              "name": "sysparm_fields",
+              "value": "sys_id,number,priority,state,assigned_to,short_description,sys_updated_on"
+            },
+            {
+              "name": "sysparm_display_value",
+              "value": "all"
+            },
+            {
+              "name": "sysparm_limit",
+              "value": "200"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "n3",
+      "name": "Get ServiceNow Incidents",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        0
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "",
+          "name": "ServiceNow Basic Auth"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "result",
+        "options": {}
+      },
+      "id": "n4",
+      "name": "Split Incidents",
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [
+        660,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const cfg = $('Config').first().json;\nconst staleMs = Number(cfg.staleHours) * 3600 * 1000;\nconst now = Date.now();\nconst val = (f) => (f && typeof f === 'object' ? f.value : f);\nconst disp = (f) => (f && typeof f === 'object' ? (f.display_value || f.value) : f);\nconst CLOSED_STATES = ['6', '7', '8']; // Resolved, Closed, Canceled\n\nconst out = [];\nfor (const item of $input.all()) {\n  const r = item.json;\n  if (CLOSED_STATES.includes(String(val(r.state)))) continue;\n\n  const priority = String(val(r.priority));\n  const updatedMs = new Date(String(val(r.sys_updated_on)).replace(' ', 'T') + 'Z').getTime();\n\n  const types = [];\n  if (priority === '1') types.push('critical');\n  if (priority === '2' && cfg.alertHigh) types.push('high');\n  if (Number.isFinite(updatedMs) && now - updatedMs >= staleMs) types.push('stale');\n\n  for (const alertType of types) {\n    out.push({\n      json: {\n        number: val(r.number),\n        alertType,\n        dedupKey: `${val(r.number)}:${alertType}`,\n        priority: disp(r.priority),\n        state: disp(r.state),\n        stateValue: String(val(r.state)),\n        assignedTo: disp(r.assigned_to) || 'Unassigned',\n        description: disp(r.short_description),\n        lastUpdated: val(r.sys_updated_on) + ' UTC',\n        link: `${cfg.instanceUrl}/nav_to.do?uri=incident.do?sys_id=${val(r.sys_id)}`,\n        recipient: cfg.recipient,\n      },\n    });\n  }\n}\nreturn out;\n"
+      },
+      "id": "n5",
+      "name": "Evaluate Rules",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const cfg = $('Config').first().json;\nconst reminderMs = Number(cfg.reminderHours) * 3600 * 1000;\nconst now = Date.now();\nconst sent = $getWorkflowStaticData('global').sent || {};\n\nreturn $input.all().filter((item) => {\n  const j = item.json;\n  const prev = sent[j.dedupKey];\n  if (!prev) return true;\n  if (prev.state !== j.stateValue) return true; // incident changed state: re-evaluate\n  if (j.alertType === 'stale' && now - new Date(prev.at).getTime() >= reminderMs) return true;\n  return false;\n});\n"
+      },
+      "id": "n6",
+      "name": "Filter Already Notified",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{ $('Config').first().json.fromEmail }}",
+        "toEmail": "={{ $json.recipient }}",
+        "subject": "={{ ({critical:'[CRITICAL INCIDENT]',high:'[HIGH PRIORITY INCIDENT]',stale:'[STALE INCIDENT REMINDER]'})[$json.alertType] }} {{ $json.number }} — {{ $json.description }}",
+        "emailFormat": "text",
+        "text": "=Hello Team,\n\n{{ ({critical:\"A critical incident has been detected in ServiceNow.\",high:\"A high-priority incident has been detected in ServiceNow.\",stale:\"An incident has not been updated and is still unresolved.\"})[$json.alertType] }}\n\n- Incident: {{ $json.number }}\n- Priority: {{ $json.priority }}\n- Status: {{ $json.state }}\n- Assigned to: {{ $json.assignedTo }}\n- Description: {{ $json.description }}\n- Last updated: {{ $json.lastUpdated }}\n\nPlease investigate this incident as soon as possible.\n\nView incident: {{ $json.link }}\n",
+        "options": {}
+      },
+      "id": "n7",
+      "name": "Send Alert Email",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        1320,
+        0
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "onError": "continueRegularOutput",
+      "credentials": {
+        "smtp": {
+          "id": "",
+          "name": "Gmail SMTP"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const staticData = $getWorkflowStaticData('global');\nstaticData.sent = staticData.sent || {};\nconst candidates = $('Filter Already Notified').all();\n\nlet failures = 0;\n$input.all().forEach((item, i) => {\n  if (item.json.error) {\n    failures += 1;\n    return;\n  }\n  const idx = item.pairedItem && item.pairedItem.item !== undefined ? item.pairedItem.item : i;\n  const alert = candidates[idx].json;\n  staticData.sent[alert.dedupKey] = { at: new Date().toISOString(), state: alert.stateValue };\n});\n\nif (failures > 0) {\n  throw new Error(`${failures} alert email(s) failed to send; successful ones were recorded, failed ones will retry next run.`);\n}\nreturn [{ json: { saved: $input.all().length } }];\n"
+      },
+      "id": "n8",
+      "name": "Save Alert State",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1540,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "Every 5 Minutes": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config": {
+      "main": [
+        [
+          {
+            "node": "Get ServiceNow Incidents",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get ServiceNow Incidents": {
+      "main": [
+        [
+          {
+            "node": "Split Incidents",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Incidents": {
+      "main": [
+        [
+          {
+            "node": "Evaluate Rules",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Evaluate Rules": {
+      "main": [
+        [
+          {
+            "node": "Filter Already Notified",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter Already Notified": {
+      "main": [
+        [
+          {
+            "node": "Send Alert Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Alert Email": {
+      "main": [
+        [
+          {
+            "node": "Save Alert State",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
