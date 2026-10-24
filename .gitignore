@@ -1,0 +1,19 @@
+# Reference images (kept local only, not part of the published project)
+*.png
+*.jpg
+*.jpeg
+
+# Secrets / environment
+.env
+*.env
+credentials.json
+*.key
+
+# n8n local data
+.n8n/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.log
+node_modules/
