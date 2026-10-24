@@ -62,8 +62,8 @@ n8n-epsilon/
 │   └── architecture.md     # detailed design doc
 ├── workflows/
 │   └── README.md           # exported n8n workflow JSON (credential-free) goes here
-└── env/
-    └── .env.example         # variable names only — never real secrets
+├── links.txt               # reference links
+└── .env.example            # variable names only — never real secrets
 ```
 
 ## Setup
@@ -71,7 +71,7 @@ n8n-epsilon/
 1. Create a [ServiceNow Personal Developer Instance](https://developer.servicenow.com/) and seed it with a few sample incidents across priorities/statuses.
 2. Install [n8n Community Edition](https://n8n.io/) locally (or self-hosted).
 3. In n8n, add credentials for the ServiceNow REST API and for Gmail SMTP (an [App Password](https://support.google.com/accounts/answer/185833) on a Google Workspace account) — store them in n8n's credential manager, never in the workflow JSON.
-4. Copy `env/.env.example` to `.env` and fill in your own instance URL and recipient address.
+4. Copy `.env.example` to `.env` and fill in your own instance URL and recipient address.
 5. Import the workflow from `workflows/`, point it at your credentials, and activate the Schedule Trigger.
 
 ## Security
