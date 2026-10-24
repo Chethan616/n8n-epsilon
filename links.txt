@@ -1,0 +1,4 @@
+ServiceNow Personal Developer Instance (create here): https://developer.servicenow.com/
+n8n (Community Edition): https://n8n.io/
+Gmail App Passwords (for Google Workspace SMTP): https://support.google.com/accounts/answer/185833
+Project repo: https://github.com/Chethan616/n8n-epsilon
