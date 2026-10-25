@@ -59,7 +59,20 @@ For stale detection, compare the current time against `sys_updated_on`. Exclude 
 
 ### Deduplication logic
 
-For each incident, track its number and alert type, e.g. `INC0010042:critical`, `INC0010042:stale`. If the same alert has already been sent, skip it. If the incident changes state or a new alert condition is triggered, evaluate it again. A reminder policy can allow a repeat email after a defined interval (e.g. 24h) instead of suppressing the alert indefinitely.
+For each incident, track its number and alert type, e.g. `INC0010042:critical`, `INC0010042:stale`. If the same alert has already been sent, skip it. If the incident changes state or a new alert condition is triggered, evaluate it again. A reminder policy allows a repeat email after a defined interval (10 min for critical/high, 24h for stale by default) instead of suppressing the alert indefinitely — see "Claim-based send" below for how this is made crash-safe.
+
+### Claim-based send (crash-safe dedup)
+
+Sending the email and recording that it was sent are two separate steps, so a crash between them could otherwise cause a duplicate on the next run. To avoid that:
+
+1. **Look up** the alert key's record. No record, a `failed` record, or an elapsed reminder interval → eligible to send. A fresh `pending` record → another attempt is already in flight → skip.
+2. **Claim** — write `status: pending` *before* attempting the send. This is the record that survives a crash.
+3. **Send** the email.
+4. **Resolve** — success → `pending → sent`, record `last_notified_at`; failure → `pending → failed`, retried next cycle.
+5. **Stale-claim recovery** — on every run, any `pending` record older than a threshold (e.g. 10 min) is treated as an abandoned/crashed attempt and reset to `failed` so it retries.
+6. **Run lock** — a short TTL lock prevents two scheduled runs from overlapping and racing to claim the same key. The lock isn't explicitly released; it simply expires, so a crash can never leave it stuck.
+
+This gives **at-least-once** delivery: a narrow-window duplicate is possible, but a missed critical alert is not — the right tradeoff for an incident monitor, since plain SMTP cannot guarantee exactly-once delivery.
 
 ## 4. Detailed n8n workflow
 
