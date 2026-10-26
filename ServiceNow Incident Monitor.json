@@ -1,0 +1,388 @@
+{
+  "name": "ServiceNow Incident Monitor",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes"
+            }
+          ]
+        }
+      },
+      "id": "62b5e931-2fcb-4a3a-bfab-782c8558c9a1",
+      "name": "Every 5 Minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "c1",
+              "name": "instanceUrl",
+              "value": "https://dev268562.service-now.com",
+              "type": "string"
+            },
+            {
+              "id": "c2",
+              "name": "recipient",
+              "value": "team@yourdomain.com",
+              "type": "string"
+            },
+            {
+              "id": "c3",
+              "name": "fromEmail",
+              "value": "your-workspace-account@yourdomain.com",
+              "type": "string"
+            },
+            {
+              "id": "c4",
+              "name": "staleHours",
+              "value": 24,
+              "type": "number"
+            },
+            {
+              "id": "c5",
+              "name": "reminderHours",
+              "value": 24,
+              "type": "number"
+            },
+            {
+              "id": "c6",
+              "name": "alertHigh",
+              "value": true,
+              "type": "boolean"
+            },
+            {
+              "id": "c7",
+              "name": "reminderMinutesUrgent",
+              "value": 10,
+              "type": "number"
+            },
+            {
+              "id": "c8",
+              "name": "staleClaimMinutes",
+              "value": 10,
+              "type": "number"
+            },
+            {
+              "id": "c9",
+              "name": "runLockMinutes",
+              "value": 4,
+              "type": "number"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "813f4b7b-2d98-434b-bffc-029806ff483b",
+      "name": "Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        224,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Prevents an overlapping run. The lock is TTL-based (not explicitly released) so a\n// crashed run can never leave the workflow permanently locked: it just expires.\nconst cfg = $('Config').first().json;\nconst sd = $getWorkflowStaticData('global');\nconst lockTtlMs = Number(cfg.runLockMinutes) * 60 * 1000;\nconst now = Date.now();\n\nif (sd.runLockedAt && now - sd.runLockedAt < lockTtlMs) {\n  throw new Error(\n    `Previous run still within its lock window (locked at ${new Date(sd.runLockedAt).toISOString()}); skipping this cycle to avoid a duplicate claim race.`\n  );\n}\nsd.runLockedAt = now;\nreturn $input.all();\n"
+      },
+      "id": "81a16226-1ad6-4a4e-8863-02685eb57673",
+      "name": "Acquire Run Lock",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        384,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// A key stuck in \"pending\" past the stale-claim threshold means a previous run\n// crashed (or errored) between Claim and Resolve. Reset it to \"failed\" so Lookup\n// treats it as retry-eligible this cycle, instead of leaving it claimed forever.\nconst cfg = $('Config').first().json;\nconst sd = $getWorkflowStaticData('global');\nsd.alerts = sd.alerts || {};\nconst thresholdMs = Number(cfg.staleClaimMinutes) * 60 * 1000;\nconst now = Date.now();\n\nfor (const key of Object.keys(sd.alerts)) {\n  const rec = sd.alerts[key];\n  if (rec.status === 'pending' && now - new Date(rec.claimed_at).getTime() >= thresholdMs) {\n    rec.status = 'failed';\n  }\n}\nreturn $input.all();\n"
+      },
+      "id": "71799bb9-3c5a-4cb0-94db-bc147307fc71",
+      "name": "Recover Stale Claims",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        544,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ $('Config').first().json.instanceUrl }}/api/now/table/incident",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "sysparm_query",
+              "value": "stateNOT IN6,7,8^ORDERBYDESCsys_updated_on"
+            },
+            {
+              "name": "sysparm_fields",
+              "value": "sys_id,number,priority,state,assigned_to,short_description,sys_updated_on"
+            },
+            {
+              "name": "sysparm_display_value",
+              "value": "all"
+            },
+            {
+              "name": "sysparm_limit",
+              "value": "200"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "0893335e-ab4b-41bb-a020-8ff78385bd67",
+      "name": "Get ServiceNow Incidents",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        704,
+        0
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "4esTk8qXONliBTYe",
+          "name": "basicauth"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "result",
+        "options": {}
+      },
+      "id": "edae9429-17cf-49ab-9295-27807dea975d",
+      "name": "Split Incidents",
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [
+        864,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const cfg = $('Config').first().json;\nconst staleMs = Number(cfg.staleHours) * 3600 * 1000;\nconst now = Date.now();\nconst val = (f) => (f && typeof f === 'object' ? f.value : f);\nconst disp = (f) => (f && typeof f === 'object' ? (f.display_value || f.value) : f);\nconst CLOSED_STATES = ['6', '7', '8']; // Resolved, Closed, Canceled\n\nconst out = [];\nfor (const item of $input.all()) {\n  const r = item.json;\n  if (CLOSED_STATES.includes(String(val(r.state)))) continue;\n\n  const priority = String(val(r.priority));\n  const updatedMs = new Date(String(val(r.sys_updated_on)).replace(' ', 'T') + 'Z').getTime();\n\n  const types = [];\n  if (priority === '1') types.push('critical');\n  if (priority === '2' && cfg.alertHigh) types.push('high');\n  if (Number.isFinite(updatedMs) && now - updatedMs >= staleMs) types.push('stale');\n\n  for (const alertType of types) {\n    out.push({\n      json: {\n        number: val(r.number),\n        alertType,\n        dedupKey: `${val(r.number)}:${alertType}`,\n        priority: disp(r.priority),\n        state: disp(r.state),\n        stateValue: String(val(r.state)),\n        assignedTo: disp(r.assigned_to) || 'Unassigned',\n        description: disp(r.short_description),\n        lastUpdated: val(r.sys_updated_on) + ' UTC',\n        link: `${cfg.instanceUrl}/nav_to.do?uri=incident.do?sys_id=${val(r.sys_id)}`,\n        recipient: cfg.recipient,\n      },\n    });\n  }\n}\nreturn out;\n"
+      },
+      "id": "c72da48f-1986-41ee-91b2-d026a9163106",
+      "name": "Evaluate Rules",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1024,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Decides, per incident+alertType key, whether this cycle should send:\n//   no record            -> send (first alert)\n//   status pending        -> skip (another claim is in flight; stale ones were\n//                            already reset to \"failed\" by Recover Stale Claims)\n//   status failed         -> send (retry)\n//   incident_state changed -> send (e.g. reopened after being resolved)\n//   status sent, interval elapsed -> send, flagged as a reminder\n//   status sent, interval not elapsed -> skip\nconst cfg = $('Config').first().json;\nconst sd = $getWorkflowStaticData('global');\nsd.alerts = sd.alerts || {};\nconst now = Date.now();\nconst MIN = 60 * 1000;\nconst urgentMs = Number(cfg.reminderMinutesUrgent) * MIN;\nconst staleMs = Number(cfg.reminderHours) * 3600 * 1000;\n\nconst out = [];\nfor (const item of $input.all()) {\n  const j = item.json;\n  const rec = sd.alerts[j.dedupKey];\n  const intervalMs = j.alertType === 'stale' ? staleMs : urgentMs;\n\n  let eligible = false;\n  let isReminder = false;\n\n  if (!rec) {\n    eligible = true;\n  } else if (rec.status === 'pending') {\n    eligible = false;\n  } else if (rec.status === 'failed') {\n    eligible = true;\n  } else if (rec.incident_state !== j.stateValue) {\n    eligible = true;\n  } else if (rec.status === 'sent' && now - new Date(rec.last_notified_at).getTime() >= intervalMs) {\n    eligible = true;\n    isReminder = true;\n  }\n\n  if (eligible) out.push({ json: { ...j, isReminder } });\n}\nreturn out;\n"
+      },
+      "id": "930813bf-c84c-42c1-bdc1-f3cca7dbf0e3",
+      "name": "Lookup Reminder Due",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1184,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Written BEFORE the email send attempt. If the workflow crashes right after the\n// send, this \"pending\" record is what Recover Stale Claims finds and retries —\n// the store never silently forgets that a send was attempted.\nconst sd = $getWorkflowStaticData('global');\nsd.alerts = sd.alerts || {};\nconst now = new Date().toISOString();\n\nfor (const item of $input.all()) {\n  const j = item.json;\n  sd.alerts[j.dedupKey] = {\n    ...(sd.alerts[j.dedupKey] || {}),\n    status: 'pending',\n    claimed_at: now,\n    incident_state: j.stateValue,\n  };\n}\nreturn $input.all();\n"
+      },
+      "id": "1319db22-e269-425d-85b7-ae4e5e55fed3",
+      "name": "Claim Pending",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1344,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "=sanjnajithu@gmail.com",
+        "toEmail": "=sanjnajithu@gmail.com",
+        "subject": "={{ ($json.isReminder ? '[REMINDER] ' : '') + ({critical:'[CRITICAL INCIDENT]',high:'[HIGH PRIORITY INCIDENT]',stale:'[STALE INCIDENT REMINDER]'})[$json.alertType] }} {{ $json.number }} — {{ $json.description }}",
+        "emailFormat": "text",
+        "text": "=Hello Team,\n\n{{ $json.isReminder ? \"This incident is still unresolved — sending another reminder.\" : ({critical:\"A critical incident has been detected in ServiceNow.\",high:\"A high-priority incident has been detected in ServiceNow.\",stale:\"An incident has not been updated and is still unresolved.\"})[$json.alertType] }}\n\n- Incident: {{ $json.number }}\n- Priority: {{ $json.priority }}\n- Status: {{ $json.state }}\n- Assigned to: {{ $json.assignedTo }}\n- Description: {{ $json.description }}\n- Last updated: {{ $json.lastUpdated }}\n\nPlease investigate this incident as soon as possible.\n\nView incident: {{ $json.link }}\n",
+        "options": {}
+      },
+      "id": "e30a4e79-de2a-49ec-9553-c321258273c0",
+      "name": "Send Alert Email",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        1504,
+        0
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "webhookId": "5c94e9c3-5d63-4045-8f75-30e38f25154a",
+      "credentials": {
+        "smtp": {
+          "id": "ycqNwihPNk51oRNJ",
+          "name": "SMTP account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Turns a \"pending\" claim into \"sent\" (success) or \"failed\" (retry next run).\n// A successful send always gets recorded, even if other emails in the same\n// batch failed — so one bad address can't cause a flood of duplicate retries\n// for incidents that were already notified successfully.\nconst sd = $getWorkflowStaticData('global');\nsd.alerts = sd.alerts || {};\nconst claimed = $('Claim Pending').all();\nconst now = new Date().toISOString();\n\nlet failures = 0;\n$input.all().forEach((item, i) => {\n  const idx = item.pairedItem && item.pairedItem.item !== undefined ? item.pairedItem.item : i;\n  const alert = claimed[idx].json;\n  if (item.json.error) {\n    failures += 1;\n    sd.alerts[alert.dedupKey] = { ...sd.alerts[alert.dedupKey], status: 'failed' };\n    return;\n  }\n  sd.alerts[alert.dedupKey] = {\n    status: 'sent',\n    last_notified_at: now,\n    incident_state: alert.stateValue,\n  };\n});\n\nif (failures > 0) {\n  throw new Error(`${failures} alert email(s) failed to send; marked failed and will retry next run.`);\n}\nreturn [{ json: { resolved: $input.all().length } }];\n"
+      },
+      "id": "426abdde-7392-44d2-ac11-3407958bb272",
+      "name": "Resolve Claim",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1664,
+        0
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Every 5 Minutes": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config": {
+      "main": [
+        [
+          {
+            "node": "Acquire Run Lock",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Acquire Run Lock": {
+      "main": [
+        [
+          {
+            "node": "Recover Stale Claims",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Recover Stale Claims": {
+      "main": [
+        [
+          {
+            "node": "Get ServiceNow Incidents",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get ServiceNow Incidents": {
+      "main": [
+        [
+          {
+            "node": "Split Incidents",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Incidents": {
+      "main": [
+        [
+          {
+            "node": "Evaluate Rules",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Evaluate Rules": {
+      "main": [
+        [
+          {
+            "node": "Lookup Reminder Due",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Lookup Reminder Due": {
+      "main": [
+        [
+          {
+            "node": "Claim Pending",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claim Pending": {
+      "main": [
+        [
+          {
+            "node": "Send Alert Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Alert Email": {
+      "main": [
+        [
+          {
+            "node": "Resolve Claim",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "11cd44bb-788e-4e1d-9e35-298dc4354cbe",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "7272077dafd551d75e9429a9ff1b4fd1e3868f80de9ee145f647d37ea9d6bf8c"
+  },
+  "nodeGroups": [],
+  "id": "NO1Hf0TfqXSz25GF",
+  "tags": []
+}

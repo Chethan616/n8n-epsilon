@@ -1,0 +1,68 @@
+{
+  "name": "ServiceNow Monitor - Error Handler",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "6a4c615b-f8c6-441d-837c-108bb495dfc4",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "sanjnajithu@gmail.com",
+        "toEmail": "sanjnajithu@gmail.com",
+        "subject": "=[n8n] {{ $json.workflow.name }} failed",
+        "emailFormat": "text",
+        "text": "=Workflow: {{ $json.workflow.name }}\nFailed node: {{ $json.execution.lastNodeExecuted }}\nError: {{ $json.execution.error.message }}\nExecution: {{ $json.execution.url }}\n",
+        "options": {}
+      },
+      "id": "2695f043-67a8-4743-874e-5b36383e3e16",
+      "name": "Email Administrator",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        224,
+        0
+      ],
+      "webhookId": "81ca8d06-134b-49bb-a190-7fbe24823115",
+      "credentials": {
+        "smtp": {
+          "id": "ycqNwihPNk51oRNJ",
+          "name": "SMTP account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Error Trigger": {
+      "main": [
+        [
+          {
+            "node": "Email Administrator",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "d34941c5-b032-4032-82b5-b10c614d5837",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "7272077dafd551d75e9429a9ff1b4fd1e3868f80de9ee145f647d37ea9d6bf8c"
+  },
+  "nodeGroups": [],
+  "id": "cjchG5hCnKiihwrN",
+  "tags": []
+}
