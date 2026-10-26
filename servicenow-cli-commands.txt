@@ -1,0 +1,149 @@
+ServiceNow Incident Table API — CLI cheat sheet (curl)
+=========================================================
+
+Setup (run once per terminal session, from the repo root):
+
+  set -a && source .env && set +a
+
+This loads SERVICENOW_INSTANCE_URL, SERVICENOW_USERNAME, SERVICENOW_PASSWORD
+from your local .env (never commit this file with real values in it — it's
+gitignored already). Every command below uses those variables, so nothing
+secret is hardcoded here.
+
+
+1) LIST incidents (find one, or see what's open)
+-------------------------------------------------
+Unresolved incidents only, newest first, a few useful fields:
+
+  curl -s -u "$SERVICENOW_USERNAME:$SERVICENOW_PASSWORD" \
+    -H "Accept: application/json" \
+    "$SERVICENOW_INSTANCE_URL/api/now/table/incident" \
+    --data-urlencode "sysparm_query=stateNOT IN6,7,8^ORDERBYDESCsys_updated_on" \
+    --data-urlencode "sysparm_fields=sys_id,number,priority,state,short_description,sys_updated_on" \
+    --data-urlencode "sysparm_display_value=all" \
+    --data-urlencode "sysparm_limit=50" \
+    -G | python3 -m json.tool
+
+All of our test incidents (filter by the tag we used when creating them):
+
+  curl -s -u "$SERVICENOW_USERNAME:$SERVICENOW_PASSWORD" \
+    -H "Accept: application/json" \
+    "$SERVICENOW_INSTANCE_URL/api/now/table/incident" \
+    --data-urlencode "sysparm_query=short_descriptionLIKEn8n-epsilon test" \
+    --data-urlencode "sysparm_fields=sys_id,number,priority,state,short_description" \
+    --data-urlencode "sysparm_display_value=all" \
+    -G | python3 -m json.tool
+
+
+2) GET one incident by number (to find its sys_id for update/delete)
+----------------------------------------------------------------------
+Replace INC0010006 with the number you want:
+
+  curl -s -u "$SERVICENOW_USERNAME:$SERVICENOW_PASSWORD" \
+    -H "Accept: application/json" \
+    "$SERVICENOW_INSTANCE_URL/api/now/table/incident" \
+    --data-urlencode "sysparm_query=number=INC0010006" \
+    --data-urlencode "sysparm_display_value=all" \
+    -G | python3 -m json.tool
+
+PATCH/DELETE need the sys_id (a long hex string), not the INC number —
+grab it from this response's "sys_id" field.
+
+
+3) CREATE a new incident (POST)
+---------------------------------
+Priority is NOT set directly — ServiceNow calculates it from impact x
+urgency. Use the combinations below for a specific priority:
+
+  Critical (priority 1): "urgency": "1", "impact": "1"
+  High     (priority 2): "urgency": "2", "impact": "1"
+  Moderate (priority 3): "urgency": "2", "impact": "2"
+  Low      (priority 4): "urgency": "3", "impact": "3"
+
+  curl -s -u "$SERVICENOW_USERNAME:$SERVICENOW_PASSWORD" \
+    -H "Content-Type: application/json" -H "Accept: application/json" \
+    -X POST "$SERVICENOW_INSTANCE_URL/api/now/table/incident" \
+    -d '{
+      "short_description": "Production application unavailable",
+      "urgency": "1",
+      "impact": "1"
+    }'
+
+Response includes the new record's "sys_id" and "number" — save the sys_id
+if you plan to update or resolve it next.
+
+Incident creation can be slow on a PDI (SLA/assignment business rules run
+synchronously) — if curl seems to hang, give it a longer timeout:
+
+  curl -s -m 60 ...   (the rest of the command unchanged)
+
+
+4) UPDATE an incident (PATCH) — change priority, description, assignment, etc.
+----------------------------------------------------------------------------
+Replace <SYS_ID> with the sys_id from step 2. Only send the fields you want
+to change:
+
+  curl -s -u "$SERVICENOW_USERNAME:$SERVICENOW_PASSWORD" \
+    -H "Content-Type: application/json" -H "Accept: application/json" \
+    -X PATCH "$SERVICENOW_INSTANCE_URL/api/now/table/incident/<SYS_ID>" \
+    -d '{
+      "short_description": "Updated description here",
+      "urgency": "2",
+      "impact": "1"
+    }'
+
+Change just the state (e.g. back to "In Progress"):
+
+  curl -s -u "$SERVICENOW_USERNAME:$SERVICENOW_PASSWORD" \
+    -H "Content-Type: application/json" -H "Accept: application/json" \
+    -X PATCH "$SERVICENOW_INSTANCE_URL/api/now/table/incident/<SYS_ID>" \
+    -d '{"state": "2"}'
+
+State values: 1=New, 2=In Progress, 3=On Hold, 6=Resolved, 7=Closed, 8=Cancelled
+
+
+5) RESOLVE an incident (PATCH with a valid close_code)
+---------------------------------------------------------
+close_code is a choice list — the exact allowed values differ per instance.
+Look them up first:
+
+  curl -s -u "$SERVICENOW_USERNAME:$SERVICENOW_PASSWORD" \
+    -H "Accept: application/json" \
+    "$SERVICENOW_INSTANCE_URL/api/now/table/sys_choice" \
+    --data-urlencode "sysparm_query=name=incident^element=close_code" \
+    --data-urlencode "sysparm_fields=label,value" \
+    -G | python3 -m json.tool
+
+Then resolve, using one of the values that came back (this instance used
+"Solution provided"):
+
+  curl -s -u "$SERVICENOW_USERNAME:$SERVICENOW_PASSWORD" \
+    -H "Content-Type: application/json" -H "Accept: application/json" \
+    -X PATCH "$SERVICENOW_INSTANCE_URL/api/now/table/incident/<SYS_ID>" \
+    -d '{
+      "state": "6",
+      "close_code": "Solution provided",
+      "close_notes": "Resolved for testing"
+    }'
+
+
+6) DELETE an incident (cleanup — use sparingly)
+---------------------------------------------------
+Only for cleaning up test data you created. There is no undo.
+
+  curl -s -u "$SERVICENOW_USERNAME:$SERVICENOW_PASSWORD" \
+    -X DELETE "$SERVICENOW_INSTANCE_URL/api/now/table/incident/<SYS_ID>" \
+    -w "\nHTTP_STATUS:%{http_code}\n"
+
+204 = deleted successfully.
+
+
+Reference
+-----------
+Endpoint pattern : https://<instance>/api/now/table/<table>
+Table used       : incident
+Auth             : HTTP Basic (user:pass, base64-encoded in the Authorization header)
+Note             : this instance required granting the user the
+                   snc_basic_auth_api_access role before Basic Auth worked
+                   (System Security's "Basic Auth Restriction" feature) —
+                   see docs/architecture.md / study-guide.pdf for details.
