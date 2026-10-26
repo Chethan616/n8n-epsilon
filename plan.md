@@ -61,12 +61,12 @@ This is **at-least-once** delivery, not exactly-once — a duplicate email is po
 | Unit tests for the full claim lifecycle (lock, stale-claim recovery, lookup, claim, resolve, two-run integration) | Chethan | Done — all passing |
 | Wire new nodes into `workflows/servicenow-incident-monitor.json`, validate against mock ServiceNow + SMTP sink across two consecutive runs | Chethan | Done — see `docs/test-results.md` |
 | Update `docs/architecture.md`, `workflows/README.md`, `docs/test-results.md` with the final behavior | Chethan | Done |
-| ServiceNow dev instance connectivity + sample incident data (P1/P2/P3, one stale, one resolved) | Chethan | Blocked — instance (`dev421307`) is hibernating; needs a manual sign-in at developer.servicenow.com to wake, then retry |
+| ServiceNow dev instance connectivity + sample incident data (P1/P2/P3, one stale, one resolved) | Chethan | Still blocked — instance (`dev421307`) is hibernating as of 2026-10-26; needs a manual sign-in at developer.servicenow.com to wake, then retry. Sanjna created a second PDI (`dev268562`) and has Gmail SMTP working, but ServiceNow Basic Auth is still failing there too |
 | Gmail SMTP credential setup + real send test | **Sanjna** | To do |
 | Reminder actually firing after the real interval elapses — live run, not simulated timestamps | **Sanjna** | To do |
 | Live test matrix once the instance is awake: real critical/high/stale alerts, a real reminder firing, a real resolve stopping reminders | Shared — Sanjna runs reminder/resolve cases once Gmail is wired up, Chethan runs ServiceNow-side cases | To do |
 | Error workflow delivery test (trigger a real failure, confirm the admin email arrives) | **Sanjna** | To do |
-| Re-export sanitized workflow JSON after any further edits, final PPT update (slide 6 per the agreed wording below) | Chethan | To do |
+| Re-export sanitized workflow JSON after any further edits, final PPT update (slide 6 per the agreed wording below) | Chethan | Done — artifact deck's workflow slide updated to all 11 nodes with the agreed wording |
 
 Slide 6 wording to use in the deck once this ships: *"Alert state is claimed as pending before sending and marked sent after success. Failed and stale attempts are retried, with concurrency controls to reduce duplicates."*
 
