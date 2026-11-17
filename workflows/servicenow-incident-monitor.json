@@ -26,58 +26,118 @@
         "assignments": {
           "assignments": [
             {
-              "id": "c1",
+              "id": "n2-0",
               "name": "instanceUrl",
               "value": "https://dev421307.service-now.com",
               "type": "string"
             },
             {
-              "id": "c2",
+              "id": "n2-1",
               "name": "recipient",
               "value": "team@yourdomain.com",
               "type": "string"
             },
             {
-              "id": "c3",
+              "id": "n2-2",
               "name": "fromEmail",
               "value": "your-workspace-account@yourdomain.com",
               "type": "string"
             },
             {
-              "id": "c4",
+              "id": "n2-3",
               "name": "staleHours",
               "value": 24,
               "type": "number"
             },
             {
-              "id": "c5",
+              "id": "n2-4",
               "name": "reminderHours",
               "value": 24,
               "type": "number"
             },
             {
-              "id": "c6",
+              "id": "n2-5",
               "name": "alertHigh",
               "value": true,
               "type": "boolean"
             },
             {
-              "id": "c7",
+              "id": "n2-6",
               "name": "reminderMinutesUrgent",
               "value": 10,
               "type": "number"
             },
             {
-              "id": "c8",
+              "id": "n2-7",
               "name": "staleClaimMinutes",
               "value": 10,
               "type": "number"
             },
             {
-              "id": "c9",
+              "id": "n2-8",
               "name": "runLockMinutes",
               "value": 4,
               "type": "number"
+            },
+            {
+              "id": "n2-9",
+              "name": "pageSize",
+              "value": 200,
+              "type": "number"
+            },
+            {
+              "id": "n2-10",
+              "name": "maxPages",
+              "value": 50,
+              "type": "number"
+            },
+            {
+              "id": "n2-11",
+              "name": "autoAckOnProgress",
+              "value": true,
+              "type": "boolean"
+            },
+            {
+              "id": "n2-12",
+              "name": "ackBaseUrl",
+              "value": "http://localhost:5678/webhook/servicenow-incident-ack",
+              "type": "string"
+            },
+            {
+              "id": "n2-13",
+              "name": "escalateTypes",
+              "value": "critical",
+              "type": "string"
+            },
+            {
+              "id": "n2-14",
+              "name": "escalateL1Minutes",
+              "value": 30,
+              "type": "number"
+            },
+            {
+              "id": "n2-15",
+              "name": "escalateL1Recipient",
+              "value": "oncall-manager@yourdomain.com",
+              "type": "string"
+            },
+            {
+              "id": "n2-16",
+              "name": "escalateL2Minutes",
+              "value": 60,
+              "type": "number"
+            },
+            {
+              "id": "n2-17",
+              "name": "escalateL2Recipient",
+              "value": "engineering-director@yourdomain.com",
+              "type": "string"
+            },
+            {
+              "id": "n2-18",
+              "name": "runId",
+              "value": "={{ $execution.id + '-' + Math.random().toString(36).slice(2, 8) }}",
+              "type": "string"
             }
           ]
         },
@@ -94,27 +154,100 @@
     },
     {
       "parameters": {
-        "jsCode": "// Prevents an overlapping run. The lock is TTL-based (not explicitly released) so a\n// crashed run can never leave the workflow permanently locked: it just expires.\nconst cfg = $('Config').first().json;\nconst sd = $getWorkflowStaticData('global');\nconst lockTtlMs = Number(cfg.runLockMinutes) * 60 * 1000;\nconst now = Date.now();\n\nif (sd.runLockedAt && now - sd.runLockedAt < lockTtlMs) {\n  throw new Error(\n    `Previous run still within its lock window (locked at ${new Date(sd.runLockedAt).toISOString()}); skipping this cycle to avoid a duplicate claim race.`\n  );\n}\nsd.runLockedAt = now;\nreturn $input.all();\n"
+        "resource": "row",
+        "operation": "get",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "servicenow_alert_state"
+        },
+        "matchType": "allConditions",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "dedup_key",
+              "condition": "eq",
+              "keyValue": "__run_lock__"
+            }
+          ]
+        },
+        "returnAll": true,
+        "options": {}
       },
-      "id": "n2a",
-      "name": "Acquire Run Lock",
+      "id": "n3",
+      "name": "Read Lock",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        440,
+        0
+      ],
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// Decides whether this run may try to take the run lease.\n//\n// The lease is a row (dedup_key \"__run_lock__\") in the alert-state Data Table, so it is shared by\n// every execution - scheduled, manual, or running on another worker. Workflow static data cannot do\n// that: it is only written back when an execution ends, so two overlapping runs overwrite each other.\n//\n// The lease is time-boxed, never explicitly released, so a crashed run can never leave the workflow\n// permanently locked: the lease simply expires after `runLockMinutes`.\nconst cfg = $('Config').first().json;\nconst row = $input.all().map((i) => i.json).find((r) => r && r.dedup_key === '__run_lock__');\n\nif (!row) {\n  throw new Error(\n    'Run-lock row not found in Data Table \"servicenow_alert_state\". ' +\n      'Run the \"ServiceNow Monitor - Setup\" workflow once, then retry.'\n  );\n}\n\nconst now = Date.now();\nconst claimedAt = row.claimed_at ? new Date(row.claimed_at).getTime() : 0;\nconst leaseMs = Number(cfg.runLockMinutes) * 60 * 1000;\n\nif (row.claim_id && claimedAt + leaseMs > now) {\n  return []; // another run holds the lease - skip this cycle quietly\n}\n\n// Propose taking the lease. \"Take Lock\" applies it as a compare-and-swap on `version`, so if two\n// runs get here at the same moment only one update matches and the other gets nothing back.\nreturn [\n  {\n    json: {\n      dedup_key: '__run_lock__',\n      status: 'lock',\n      claim_id: cfg.runId,\n      claimed_at: new Date(now).toISOString(),\n      version: Number(row.version || 0) + 1,\n    },\n  },\n];\n"
+      },
+      "id": "n4",
+      "name": "Try Acquire Lock",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        380,
+        660,
         0
       ]
     },
     {
       "parameters": {
-        "jsCode": "// A key stuck in \"pending\" past the stale-claim threshold means a previous run\n// crashed (or errored) between Claim and Resolve. Reset it to \"failed\" so Lookup\n// treats it as retry-eligible this cycle, instead of leaving it claimed forever.\nconst cfg = $('Config').first().json;\nconst sd = $getWorkflowStaticData('global');\nsd.alerts = sd.alerts || {};\nconst thresholdMs = Number(cfg.staleClaimMinutes) * 60 * 1000;\nconst now = Date.now();\n\nfor (const key of Object.keys(sd.alerts)) {\n  const rec = sd.alerts[key];\n  if (rec.status === 'pending' && now - new Date(rec.claimed_at).getTime() >= thresholdMs) {\n    rec.status = 'failed';\n  }\n}\nreturn $input.all();\n"
+        "resource": "row",
+        "operation": "update",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "servicenow_alert_state"
+        },
+        "matchType": "allConditions",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "dedup_key",
+              "condition": "eq",
+              "keyValue": "={{ $json.dedup_key }}"
+            },
+            {
+              "keyName": "version",
+              "condition": "eq",
+              "keyValue": "={{ $json.version - 1 }}"
+            }
+          ]
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": null,
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
       },
-      "id": "n2b",
-      "name": "Recover Stale Claims",
+      "id": "n5",
+      "name": "Take Lock",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        880,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// \"Take Lock\" is a compare-and-swap, so it only returns the row if this run's update actually\n// matched. Confirm the lease holder is us; otherwise another run won the race and we stop.\nconst cfg = $('Config').first().json;\nconst won = $input.all().some((i) => i.json && i.json.claim_id === cfg.runId);\nif (!won) return [];\nreturn [{ json: { runId: cfg.runId, lockAcquiredAt: new Date().toISOString() } }];\n"
+      },
+      "id": "n6",
+      "name": "Verify Lock",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        540,
+        1100,
         0
       ]
     },
@@ -128,7 +261,7 @@
           "parameters": [
             {
               "name": "sysparm_query",
-              "value": "stateNOT IN6,7,8^ORDERBYDESCsys_updated_on"
+              "value": "stateNOT IN6,7,8^ORDERBYnumber"
             },
             {
               "name": "sysparm_fields",
@@ -140,18 +273,42 @@
             },
             {
               "name": "sysparm_limit",
-              "value": "200"
+              "value": "={{ $('Config').first().json.pageSize }}"
+            },
+            {
+              "name": "sysparm_offset",
+              "value": "0"
             }
           ]
         },
-        "options": {}
+        "options": {
+          "pagination": {
+            "pagination": {
+              "paginationMode": "updateAParameterInEachRequest",
+              "parameters": {
+                "parameters": [
+                  {
+                    "type": "qs",
+                    "name": "sysparm_offset",
+                    "value": "={{ $pageCount * Number($('Config').first().json.pageSize) }}"
+                  }
+                ]
+              },
+              "paginationCompleteWhen": "other",
+              "completeExpression": "={{ !Array.isArray($response.body.result) || $response.body.result.length < Number($('Config').first().json.pageSize) }}",
+              "limitPagesFetched": true,
+              "maxRequests": "={{ Number($('Config').first().json.maxPages) }}",
+              "requestInterval": 0
+            }
+          }
+        }
       },
-      "id": "n3",
+      "id": "n7",
       "name": "Get ServiceNow Incidents",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        700,
+        1320,
         0
       ],
       "retryOnFail": true,
@@ -166,77 +323,219 @@
     },
     {
       "parameters": {
-        "fieldToSplitOut": "result",
-        "options": {}
+        "jsCode": "// Turns the (paginated) ServiceNow response into the list of alerts that currently apply.\n// Always returns exactly ONE item so the rest of the run still executes when there are no alerts\n// (that is when \"close cleared alerts\" matters most).\nconst cfg = $('Config').first().json;\nconst staleMs = Number(cfg.staleHours) * 3600 * 1000;\nconst pageSize = Number(cfg.pageSize);\nconst maxPages = Number(cfg.maxPages);\nconst now = Date.now();\nconst val = (f) => (f && typeof f === 'object' ? f.value : f);\nconst disp = (f) => (f && typeof f === 'object' ? f.display_value || f.value : f);\nconst CLOSED_STATES = ['6', '7', '8']; // Resolved, Closed, Canceled\n\n// ---- 1. Collect every page --------------------------------------------------------------\nconst pages = $input.all();\nconst incidents = [];\nconst seen = new Set();\nlet lastPageLength = 0;\n\nfor (const page of pages) {\n  const result = page.json && page.json.result;\n  if (!Array.isArray(result)) {\n    // an API error body, e.g. {\"error\": {\"message\": ...}, \"status\": \"failure\"}\n    const apiError = page.json && page.json.error;\n    if (apiError) {\n      const msg = typeof apiError === 'string' ? apiError : apiError.message || JSON.stringify(apiError);\n      throw new Error(`ServiceNow API error: ${msg}`);\n    }\n    // e.g. a hibernating instance returns an HTML page with HTTP 200\n    throw new Error(\n      'Unexpected ServiceNow response: no \"result\" array. The instance may be hibernating, ' +\n        'or the account may be blocked by Basic Auth restrictions.'\n    );\n  }\n  lastPageLength = result.length;\n  for (const r of result) {\n    const id = val(r.sys_id) || val(r.number);\n    if (seen.has(id)) continue; // offset paging can overlap if records move between requests\n    seen.add(id);\n    incidents.push(r);\n  }\n}\n\n// ---- 2. Refuse to act on a truncated list -----------------------------------------------\n// Closing \"cleared\" alerts is only safe if we saw EVERY open incident. If we hit the page cap with\n// a full last page there may be more, so fail loudly (the error workflow emails the admin).\nif (pages.length >= maxPages && lastPageLength >= pageSize) {\n  throw new Error(\n    `Pagination cap reached (${maxPages} pages x ${pageSize} records) and more incidents may exist. ` +\n      'Refusing to evaluate a partial incident list. Raise maxPages or narrow the query.'\n  );\n}\n\n// ---- 3. Apply the alert rules -----------------------------------------------------------\nconst alerts = [];\nfor (const r of incidents) {\n  const stateValue = String(val(r.state));\n  if (CLOSED_STATES.includes(stateValue)) continue;\n\n  const number = val(r.number);\n  const priority = String(val(r.priority));\n  const updatedMs = new Date(String(val(r.sys_updated_on)).replace(' ', 'T') + 'Z').getTime();\n  const assignedTo = disp(r.assigned_to) || '';\n\n  const types = [];\n  if (priority === '1') types.push('critical');\n  if (priority === '2' && cfg.alertHigh) types.push('high');\n  if (Number.isFinite(updatedMs) && now - updatedMs >= staleMs) types.push('stale');\n\n  // Someone has picked it up: In Progress (2) and assigned. Treated as an implicit acknowledgement.\n  const autoAck = Boolean(cfg.autoAckOnProgress) && stateValue === '2' && assignedTo !== '';\n\n  for (const alertType of types) {\n    alerts.push({\n      number,\n      alertType,\n      dedupKey: `${number}:${alertType}`,\n      stateValue,\n      autoAck,\n      payload: {\n        number,\n        sysId: val(r.sys_id),\n        priority: disp(r.priority),\n        state: disp(r.state),\n        assignedTo: assignedTo || 'Unassigned',\n        description: disp(r.short_description),\n        lastUpdated: `${val(r.sys_updated_on)} UTC`,\n        link: `${cfg.instanceUrl}/nav_to.do?uri=incident.do?sys_id=${val(r.sys_id)}`,\n        autoAck,\n      },\n    });\n  }\n}\n\nreturn [\n  {\n    json: {\n      alerts,\n      incidentCount: incidents.length,\n      pageCount: pages.length,\n    },\n  },\n];\n"
       },
-      "id": "n4",
-      "name": "Split Incidents",
-      "type": "n8n-nodes-base.splitOut",
-      "typeVersion": 1,
-      "position": [
-        860,
-        0
-      ]
-    },
-    {
-      "parameters": {
-        "jsCode": "const cfg = $('Config').first().json;\nconst staleMs = Number(cfg.staleHours) * 3600 * 1000;\nconst now = Date.now();\nconst val = (f) => (f && typeof f === 'object' ? f.value : f);\nconst disp = (f) => (f && typeof f === 'object' ? (f.display_value || f.value) : f);\nconst CLOSED_STATES = ['6', '7', '8']; // Resolved, Closed, Canceled\n\nconst out = [];\nfor (const item of $input.all()) {\n  const r = item.json;\n  if (CLOSED_STATES.includes(String(val(r.state)))) continue;\n\n  const priority = String(val(r.priority));\n  const updatedMs = new Date(String(val(r.sys_updated_on)).replace(' ', 'T') + 'Z').getTime();\n\n  const types = [];\n  if (priority === '1') types.push('critical');\n  if (priority === '2' && cfg.alertHigh) types.push('high');\n  if (Number.isFinite(updatedMs) && now - updatedMs >= staleMs) types.push('stale');\n\n  for (const alertType of types) {\n    out.push({\n      json: {\n        number: val(r.number),\n        alertType,\n        dedupKey: `${val(r.number)}:${alertType}`,\n        priority: disp(r.priority),\n        state: disp(r.state),\n        stateValue: String(val(r.state)),\n        assignedTo: disp(r.assigned_to) || 'Unassigned',\n        description: disp(r.short_description),\n        lastUpdated: val(r.sys_updated_on) + ' UTC',\n        link: `${cfg.instanceUrl}/nav_to.do?uri=incident.do?sys_id=${val(r.sys_id)}`,\n        recipient: cfg.recipient,\n      },\n    });\n  }\n}\nreturn out;\n"
-      },
-      "id": "n5",
+      "id": "n8",
       "name": "Evaluate Rules",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1020,
+        1540,
         0
       ]
     },
     {
       "parameters": {
-        "jsCode": "// Decides, per incident+alertType key, whether this cycle should send:\n//   no record            -> send (first alert)\n//   status pending        -> skip (another claim is in flight; stale ones were\n//                            already reset to \"failed\" by Recover Stale Claims)\n//   status failed         -> send (retry)\n//   incident_state changed -> send (e.g. reopened after being resolved)\n//   status sent, interval elapsed -> send, flagged as a reminder\n//   status sent, interval not elapsed -> skip\nconst cfg = $('Config').first().json;\nconst sd = $getWorkflowStaticData('global');\nsd.alerts = sd.alerts || {};\nconst now = Date.now();\nconst MIN = 60 * 1000;\nconst urgentMs = Number(cfg.reminderMinutesUrgent) * MIN;\nconst staleMs = Number(cfg.reminderHours) * 3600 * 1000;\n\nconst out = [];\nfor (const item of $input.all()) {\n  const j = item.json;\n  const rec = sd.alerts[j.dedupKey];\n  const intervalMs = j.alertType === 'stale' ? staleMs : urgentMs;\n\n  let eligible = false;\n  let isReminder = false;\n\n  if (!rec) {\n    eligible = true;\n  } else if (rec.status === 'pending') {\n    eligible = false;\n  } else if (rec.status === 'failed') {\n    eligible = true;\n  } else if (rec.incident_state !== j.stateValue) {\n    eligible = true;\n  } else if (rec.status === 'sent' && now - new Date(rec.last_notified_at).getTime() >= intervalMs) {\n    eligible = true;\n    isReminder = true;\n  }\n\n  if (eligible) out.push({ json: { ...j, isReminder } });\n}\nreturn out;\n"
+        "resource": "row",
+        "operation": "get",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "servicenow_alert_state"
+        },
+        "matchType": "anyCondition",
+        "returnAll": true,
+        "options": {}
       },
-      "id": "n6",
-      "name": "Lookup Reminder Due",
+      "id": "n9",
+      "name": "Load Alert State",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        1760,
+        0
+      ],
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// Compares the alerts that apply NOW (Evaluate Rules) with the stored alert state (Load Alert State)\n// and emits one \"patch row\" per write that has to happen. Every patch carries the NEW `version`;\n// the Data Table update node only applies it if the stored row still has `version - 1`\n// (compare-and-swap), which is what makes a claim atomic when two runs race.\n//\n// Patch rows come in three flavours (all written by the same CAS update):\n//   claim        status 'pending' + claim_id = this run  -> an email will be sent for it\n//   housekeeping resolve cleared alerts, apply auto-acknowledgements\n//   new row      version 1 -> routed to an INSERT instead of an update\n//\n// Nothing to do  ->  returns [] and the run ends.\nconst cfg = $('Config').first().json;\nconst ev = $('Evaluate Rules').first().json;\nconst now = Date.now();\nconst nowIso = new Date(now).toISOString();\nconst MIN = 60 * 1000;\nconst claimId = cfg.runId;\n\nconst urgentMs = Number(cfg.reminderMinutesUrgent) * MIN; // critical / high\nconst staleReminderMs = Number(cfg.reminderHours) * 60 * MIN; // stale\nconst staleClaimMs = Number(cfg.staleClaimMinutes) * MIN;\nconst escalateTypes = String(cfg.escalateTypes || '')\n  .split(',')\n  .map((s) => s.trim())\n  .filter(Boolean);\nconst levels = [1, 2]\n  .map((n) => ({\n    level: n,\n    afterMs: Number(cfg['escalateL' + n + 'Minutes']) * MIN,\n    to: String(cfg['escalateL' + n + 'Recipient'] || '').trim(),\n  }))\n  .filter((l) => l.to && Number.isFinite(l.afterMs) && l.afterMs > 0);\n\nconst ts = (v) => (v ? new Date(v).getTime() : 0);\n\nfunction newToken() {\n  try {\n    return require('crypto').randomBytes(24).toString('hex'); // only if the runner allows it\n  } catch (e) {\n    let s = '';\n    for (let i = 0; i < 4; i++) s += Math.random().toString(16).slice(2, 12).padEnd(10, '0');\n    return s + now.toString(16);\n  }\n}\n\n// ---- existing state, one row per key (if duplicates ever exist, the OLDEST row wins) ----------\nconst byKey = new Map();\nfor (const item of $input.all()) {\n  const r = item.json;\n  if (!r || !r.dedup_key || r.dedup_key === '__run_lock__') continue;\n  const prev = byKey.get(r.dedup_key);\n  if (!prev || Number(r.id) < Number(prev.id)) byKey.set(r.dedup_key, r);\n}\n\n// ---- notification policy ------------------------------------------------------------------\n// For a row that has been notified at least once and is NOT acknowledged: what is due now?\nfunction dueFor(row, a) {\n  const first = ts(row.first_notified_at);\n  const last = ts(row.last_notified_at) || first;\n  const lvl = Number(row.escalation_level || 0);\n\n  if (escalateTypes.includes(a.alertType)) {\n    const next = levels.find((l) => l.level === lvl + 1);\n    if (next && now - first >= next.afterMs) return { kind: 'escalation', level: next.level };\n  }\n  const interval = a.alertType === 'stale' ? staleReminderMs : urgentMs;\n  if (now - last >= interval) return { kind: 'reminder', level: lvl };\n  return null;\n}\n\n// A previous attempt failed or was abandoned: deliver now, regardless of the interval.\nfunction retryKind(row, a) {\n  if (!row.first_notified_at) return { kind: 'alert', level: 0 };\n  const d = dueFor(row, a);\n  if (d && d.kind === 'escalation') return d;\n  return { kind: 'reminder', level: Number(row.escalation_level || 0) };\n}\n\nconst housekeeping = [];\nconst claims = [];\n\nfunction claimPatch(row, a, k, extra = {}) {\n  return {\n    dedup_key: a.dedupKey,\n    incident_number: a.number,\n    alert_type: a.alertType,\n    incident_state: a.stateValue,\n    payload: JSON.stringify(a.payload),\n    status: 'pending',\n    claim_id: claimId,\n    claimed_at: nowIso,\n    claim_kind: k.kind,\n    claim_level: k.level,\n    attempts: Number(row.attempts || 0) + 1,\n    last_error: null,\n    version: Number(row.version) + 1,\n    ...extra,\n  };\n}\n\n// ---- 1. alerts that apply now ----------------------------------------------------------------\nfor (const a of ev.alerts) {\n  const row = byKey.get(a.dedupKey);\n\n  if (!row) {\n    claims.push({\n      dedup_key: a.dedupKey,\n      incident_number: a.number,\n      alert_type: a.alertType,\n      incident_state: a.stateValue,\n      payload: JSON.stringify(a.payload),\n      status: 'pending',\n      claim_id: claimId,\n      claimed_at: nowIso,\n      claim_kind: 'alert',\n      claim_level: 0,\n      reminder_count: 0,\n      escalation_level: 0,\n      attempts: 1,\n      ack_token: newToken(),\n      version: 1, // version 1 = brand-new row -> INSERT\n    });\n    continue;\n  }\n\n  const acked = Boolean(row.acked_at);\n  const everNotified = Boolean(row.first_notified_at);\n\n  switch (row.status) {\n    case 'resolved':\n      // The condition came back (reopened / re-escalated): start a completely fresh cycle with a\n      // new acknowledgement token, so an old email link cannot acknowledge the new occurrence.\n      claims.push(\n        claimPatch(row, a, { kind: 'alert', level: 0 }, {\n          first_notified_at: null,\n          last_notified_at: null,\n          resolved_at: null,\n          acked_at: null,\n          acked_by: null,\n          ack_source: null,\n          ack_token: newToken(),\n          reminder_count: 0,\n          escalation_level: 0,\n          attempts: 1,\n        })\n      );\n      break;\n\n    case 'pending':\n      // Another run is mid-send - unless it died. A claim older than the threshold is abandoned,\n      // so take it over directly (recover + claim in one compare-and-swap).\n      if (now - ts(row.claimed_at) >= staleClaimMs) {\n        if (acked && everNotified) {\n          housekeeping.push({ dedup_key: a.dedupKey, status: 'sent', last_error: 'stale claim recovered', version: Number(row.version) + 1 });\n        } else {\n          claims.push(claimPatch(row, a, retryKind(row, a), { last_error: 'stale claim recovered' }));\n        }\n      }\n      break;\n\n    case 'failed':\n      if (acked && everNotified) {\n        // acknowledged while a reminder was failing: nothing left to retry\n        housekeeping.push({ dedup_key: a.dedupKey, status: 'sent', version: Number(row.version) + 1 });\n      } else {\n        claims.push(claimPatch(row, a, retryKind(row, a)));\n      }\n      break;\n\n    case 'sent': {\n      if (acked) break; // acknowledged: no reminders, no escalation\n      if (a.autoAck) {\n        housekeeping.push({\n          dedup_key: a.dedupKey,\n          acked_at: nowIso,\n          acked_by: 'ServiceNow (In Progress)',\n          ack_source: 'servicenow',\n          version: Number(row.version) + 1,\n        });\n        break;\n      }\n      const due = dueFor(row, a);\n      if (due) claims.push(claimPatch(row, a, due));\n      break;\n    }\n\n    default:\n      break; // unknown status: leave it alone\n  }\n}\n\n// ---- 2. close alerts whose condition no longer holds ------------------------------------------\n// Resolved, downgraded, or updated-so-no-longer-stale. A later recurrence starts a fresh cycle.\nconst active = new Set(ev.alerts.map((a) => a.dedupKey));\nfor (const [key, row] of byKey) {\n  if (active.has(key) || row.status === 'resolved') continue;\n  const inFlight = row.status === 'pending' && now - ts(row.claimed_at) < staleClaimMs;\n  if (inFlight) continue;\n  housekeeping.push({ dedup_key: key, status: 'resolved', resolved_at: nowIso, version: Number(row.version) + 1 });\n}\n\nreturn [...housekeeping, ...claims].map((json) => ({ json }));\n"
+      },
+      "id": "n10",
+      "name": "Plan Actions",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1180,
+        1980,
         0
       ]
     },
     {
       "parameters": {
-        "jsCode": "// Written BEFORE the email send attempt. If the workflow crashes right after the\n// send, this \"pending\" record is what Recover Stale Claims finds and retries —\n// the store never silently forgets that a send was attempted.\nconst sd = $getWorkflowStaticData('global');\nsd.alerts = sd.alerts || {};\nconst now = new Date().toISOString();\n\nfor (const item of $input.all()) {\n  const j = item.json;\n  sd.alerts[j.dedupKey] = {\n    ...(sd.alerts[j.dedupKey] || {}),\n    status: 'pending',\n    claimed_at: now,\n    incident_state: j.stateValue,\n  };\n}\nreturn $input.all();\n"
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "is-new",
+              "leftValue": "={{ $json.version }}",
+              "rightValue": 1,
+              "operator": {
+                "type": "number",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
       },
-      "id": "n6b",
-      "name": "Claim Pending",
+      "id": "n11",
+      "name": "Route New vs Existing",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2200,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "row",
+        "operation": "insert",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "servicenow_alert_state"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": null,
+          "matchingColumns": [],
+          "schema": []
+        }
+      },
+      "id": "n12",
+      "name": "Insert New Alert Rows",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        2420,
+        -200
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "row",
+        "operation": "update",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "servicenow_alert_state"
+        },
+        "matchType": "allConditions",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "dedup_key",
+              "condition": "eq",
+              "keyValue": "={{ $json.dedup_key }}"
+            },
+            {
+              "keyName": "version",
+              "condition": "eq",
+              "keyValue": "={{ $json.version - 1 }}"
+            }
+          ]
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": null,
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "n13",
+      "name": "Claim Existing Rows",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        2420,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "append"
+      },
+      "id": "n14",
+      "name": "Merge Claims",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [
+        2640,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "row",
+        "operation": "get",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "servicenow_alert_state"
+        },
+        "matchType": "anyCondition",
+        "returnAll": true,
+        "options": {}
+      },
+      "id": "n15",
+      "name": "Re-read Alert State",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        2860,
+        0
+      ],
+      "alwaysOutputData": true,
+      "executeOnce": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// Keeps only the claims THIS run owns and builds the email for each one.\n//\n// Ownership is re-checked against a fresh read of the table: if a lease failure ever let two runs\n// INSERT the same brand-new key (Data Tables have no unique constraint), the row with the lowest id\n// wins and the loser drops its claim here, before anything is sent.\nconst cfg = $('Config').first().json;\nconst fresh = $input.all().map((i) => i.json);\n\nconst oldestId = new Map();\nfor (const r of fresh) {\n  if (!r || !r.dedup_key) continue;\n  const cur = oldestId.get(r.dedup_key);\n  if (cur === undefined || Number(r.id) < cur) oldestId.set(r.dedup_key, Number(r.id));\n}\n\nconst TAG = {\n  critical: '[CRITICAL INCIDENT]',\n  high: '[HIGH PRIORITY INCIDENT]',\n  stale: '[STALE INCIDENT REMINDER]',\n};\nconst INTRO = {\n  critical: 'A critical incident has been detected in ServiceNow.',\n  high: 'A high-priority incident has been detected in ServiceNow.',\n  stale: 'An incident has not been updated and is still unresolved.',\n};\n\nconst seen = new Set();\nconst out = [];\nfor (const item of $('Merge Claims').all()) {\n  const r = item.json;\n  if (!r || r.status !== 'pending' || r.claim_id !== cfg.runId) continue;\n  if (seen.has(r.dedup_key)) continue;\n  if (oldestId.get(r.dedup_key) !== Number(r.id)) continue; // lost an insert race\n  seen.add(r.dedup_key);\n\n  let p = {};\n  try {\n    p = JSON.parse(r.payload || '{}');\n  } catch (e) {\n    p = {};\n  }\n  const kind = r.claim_kind || 'alert';\n  const level = Number(r.claim_level || 0);\n  const count = Number(r.reminder_count || 0);\n  const minutesOpen = r.first_notified_at\n    ? Math.round((Date.now() - new Date(r.first_notified_at).getTime()) / 60000)\n    : 0;\n\n  const to = [cfg.recipient];\n  if (kind === 'escalation') {\n    const extra = String(cfg['escalateL' + level + 'Recipient'] || '').trim();\n    if (extra) to.push(extra);\n  }\n\n  const prefix = kind === 'escalation' ? `[ESCALATION L${level}] ` : kind === 'reminder' ? '[REMINDER] ' : '';\n  const subject = `${prefix}${TAG[r.alert_type] || '[INCIDENT]'} ${p.number} — ${p.description}`;\n\n  let intro = INTRO[r.alert_type] || 'An incident needs attention.';\n  if (kind === 'reminder') {\n    intro = `This incident is still unresolved and has not been acknowledged — reminder #${count + 1}.`;\n  } else if (kind === 'escalation') {\n    intro =\n      `ESCALATION LEVEL ${level}: this incident has not been acknowledged ${minutesOpen} minutes ` +\n      'after the first alert. Please take ownership now.';\n  }\n\n  const ackLine = cfg.ackBaseUrl\n    ? `\\nAcknowledge (stops reminders and escalation):\\n${cfg.ackBaseUrl}?key=${encodeURIComponent(r.dedup_key)}&token=${r.ack_token}\\n`\n    : '';\n\n  const text =\n    `Hello Team,\\n\\n${intro}\\n\\n` +\n    `- Incident: ${p.number}\\n- Priority: ${p.priority}\\n- Status: ${p.state}\\n` +\n    `- Assigned to: ${p.assignedTo}\\n- Description: ${p.description}\\n- Last updated: ${p.lastUpdated}\\n\\n` +\n    'Please investigate this incident as soon as possible.\\n\\n' +\n    `View incident: ${p.link}\\n${ackLine}`;\n\n  out.push({\n    json: {\n      dedup_key: r.dedup_key,\n      claim_id: r.claim_id,\n      kind,\n      level,\n      autoAck: Boolean(p.autoAck),\n      to: to.join(','),\n      subject,\n      text,\n      reminder_count: count,\n      escalation_level: Number(r.escalation_level || 0),\n      first_notified_at: r.first_notified_at || null,\n    },\n  });\n}\nreturn out;\n"
+      },
+      "id": "n16",
+      "name": "Select My Claims",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1340,
+        3080,
         0
       ]
     },
     {
       "parameters": {
         "fromEmail": "={{ $('Config').first().json.fromEmail }}",
-        "toEmail": "={{ $json.recipient }}",
-        "subject": "={{ ($json.isReminder ? '[REMINDER] ' : '') + ({critical:'[CRITICAL INCIDENT]',high:'[HIGH PRIORITY INCIDENT]',stale:'[STALE INCIDENT REMINDER]'})[$json.alertType] }} {{ $json.number }} — {{ $json.description }}",
+        "toEmail": "={{ $json.to }}",
+        "subject": "={{ $json.subject }}",
         "emailFormat": "text",
-        "text": "=Hello Team,\n\n{{ $json.isReminder ? \"This incident is still unresolved — sending another reminder.\" : ({critical:\"A critical incident has been detected in ServiceNow.\",high:\"A high-priority incident has been detected in ServiceNow.\",stale:\"An incident has not been updated and is still unresolved.\"})[$json.alertType] }}\n\n- Incident: {{ $json.number }}\n- Priority: {{ $json.priority }}\n- Status: {{ $json.state }}\n- Assigned to: {{ $json.assignedTo }}\n- Description: {{ $json.description }}\n- Last updated: {{ $json.lastUpdated }}\n\nPlease investigate this incident as soon as possible.\n\nView incident: {{ $json.link }}\n",
+        "text": "={{ $json.text }}",
         "options": {}
       },
-      "id": "n7",
+      "id": "n17",
       "name": "Send Alert Email",
       "type": "n8n-nodes-base.emailSend",
       "typeVersion": 2.1,
       "position": [
-        1500,
+        3300,
         0
       ],
-      "retryOnFail": true,
-      "maxTries": 3,
-      "waitBetweenTries": 3000,
       "onError": "continueRegularOutput",
       "credentials": {
         "smtp": {
@@ -247,14 +546,73 @@
     },
     {
       "parameters": {
-        "jsCode": "// Turns a \"pending\" claim into \"sent\" (success) or \"failed\" (retry next run).\n// A successful send always gets recorded, even if other emails in the same\n// batch failed — so one bad address can't cause a flood of duplicate retries\n// for incidents that were already notified successfully.\nconst sd = $getWorkflowStaticData('global');\nsd.alerts = sd.alerts || {};\nconst claimed = $('Claim Pending').all();\nconst now = new Date().toISOString();\n\nlet failures = 0;\n$input.all().forEach((item, i) => {\n  const idx = item.pairedItem && item.pairedItem.item !== undefined ? item.pairedItem.item : i;\n  const alert = claimed[idx].json;\n  if (item.json.error) {\n    failures += 1;\n    sd.alerts[alert.dedupKey] = { ...sd.alerts[alert.dedupKey], status: 'failed' };\n    return;\n  }\n  sd.alerts[alert.dedupKey] = {\n    status: 'sent',\n    last_notified_at: now,\n    incident_state: alert.stateValue,\n  };\n});\n\nif (failures > 0) {\n  throw new Error(`${failures} alert email(s) failed to send; marked failed and will retry next run.`);\n}\nreturn [{ json: { resolved: $input.all().length } }];\n"
+        "jsCode": "// Turns each claim into its outcome row: 'sent' on success, 'failed' (retried next run) on error.\n// A successful send is always recorded, even when other emails in the same batch failed, so one bad\n// address cannot cause duplicate retries for incidents that were notified fine.\nconst claims = $('Select My Claims').all();\nconst nowIso = new Date().toISOString();\nconst out = [];\n\n$input.all().forEach((item, i) => {\n  const idx = item.pairedItem && item.pairedItem.item !== undefined ? item.pairedItem.item : i;\n  const c = claims[idx].json;\n\n  if (item.json && item.json.error) {\n    const e = item.json.error;\n    const message = typeof e === 'string' ? e : e.message || JSON.stringify(e);\n    out.push({\n      json: { dedup_key: c.dedup_key, claim_id: c.claim_id, status: 'failed', last_error: String(message).slice(0, 500) },\n    });\n    return;\n  }\n\n  const patch = {\n    dedup_key: c.dedup_key,\n    claim_id: c.claim_id,\n    status: 'sent',\n    first_notified_at: c.first_notified_at || nowIso,\n    last_notified_at: nowIso,\n    last_error: null,\n    reminder_count: c.reminder_count + (c.kind === 'reminder' ? 1 : 0),\n    escalation_level: c.kind === 'escalation' ? c.level : c.escalation_level,\n  };\n  if (c.autoAck) {\n    patch.acked_at = nowIso;\n    patch.acked_by = 'ServiceNow (In Progress)';\n    patch.ack_source = 'servicenow';\n  }\n  out.push({ json: patch });\n});\n\nreturn out;\n"
       },
-      "id": "n8",
-      "name": "Resolve Claim",
+      "id": "n18",
+      "name": "Resolve Claims",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1660,
+        3520,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "row",
+        "operation": "update",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "servicenow_alert_state"
+        },
+        "matchType": "allConditions",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "dedup_key",
+              "condition": "eq",
+              "keyValue": "={{ $json.dedup_key }}"
+            },
+            {
+              "keyName": "claim_id",
+              "condition": "eq",
+              "keyValue": "={{ $json.claim_id }}"
+            },
+            {
+              "keyName": "status",
+              "condition": "eq",
+              "keyValue": "pending"
+            }
+          ]
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": null,
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "n19",
+      "name": "Record Results",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        3740,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Runs AFTER the outcomes are stored. If any email failed, raise an error so the error workflow\n// notifies the administrator - the failed rows are already marked 'failed' and retry next run.\nconst outcomes = $('Resolve Claims').all().map((i) => i.json);\nconst failed = outcomes.filter((o) => o.status === 'failed');\nif (failed.length > 0) {\n  throw new Error(\n    `${failed.length} alert email(s) failed to send (${failed.map((f) => f.dedup_key).join(', ')}); ` +\n      'marked failed and will be retried next run. First error: ' + failed[0].last_error\n  );\n}\nreturn [{ json: { sent: outcomes.length } }];\n"
+      },
+      "id": "n20",
+      "name": "Raise Failures",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3960,
         0
       ]
     }
@@ -275,25 +633,47 @@
       "main": [
         [
           {
-            "node": "Acquire Run Lock",
+            "node": "Read Lock",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Acquire Run Lock": {
+    "Read Lock": {
       "main": [
         [
           {
-            "node": "Recover Stale Claims",
+            "node": "Try Acquire Lock",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Recover Stale Claims": {
+    "Try Acquire Lock": {
+      "main": [
+        [
+          {
+            "node": "Take Lock",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Take Lock": {
+      "main": [
+        [
+          {
+            "node": "Verify Lock",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify Lock": {
       "main": [
         [
           {
@@ -308,17 +688,6 @@
       "main": [
         [
           {
-            "node": "Split Incidents",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Split Incidents": {
-      "main": [
-        [
-          {
             "node": "Evaluate Rules",
             "type": "main",
             "index": 0
@@ -330,25 +699,98 @@
       "main": [
         [
           {
-            "node": "Lookup Reminder Due",
+            "node": "Load Alert State",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Lookup Reminder Due": {
+    "Load Alert State": {
       "main": [
         [
           {
-            "node": "Claim Pending",
+            "node": "Plan Actions",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Claim Pending": {
+    "Plan Actions": {
+      "main": [
+        [
+          {
+            "node": "Route New vs Existing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route New vs Existing": {
+      "main": [
+        [
+          {
+            "node": "Insert New Alert Rows",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Claim Existing Rows",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert New Alert Rows": {
+      "main": [
+        [
+          {
+            "node": "Merge Claims",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claim Existing Rows": {
+      "main": [
+        [
+          {
+            "node": "Merge Claims",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge Claims": {
+      "main": [
+        [
+          {
+            "node": "Re-read Alert State",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Re-read Alert State": {
+      "main": [
+        [
+          {
+            "node": "Select My Claims",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Select My Claims": {
       "main": [
         [
           {
@@ -363,7 +805,29 @@
       "main": [
         [
           {
-            "node": "Resolve Claim",
+            "node": "Resolve Claims",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Resolve Claims": {
+      "main": [
+        [
+          {
+            "node": "Record Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Record Results": {
+      "main": [
+        [
+          {
+            "node": "Raise Failures",
             "type": "main",
             "index": 0
           }

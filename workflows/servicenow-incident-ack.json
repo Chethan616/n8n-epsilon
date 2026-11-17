@@ -1,0 +1,524 @@
+{
+  "name": "ServiceNow Incident Ack",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "servicenow-incident-ack",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "a1",
+      "name": "Ack Link Opened (GET)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "5d1f0c52-8a0e-4b1e-9c11-0a1b2c3d4e01"
+    },
+    {
+      "parameters": {
+        "jsCode": "// GET /servicenow-incident-ack?key=...&token=...\n// Email scanners and link previewers issue GET requests automatically, so a GET must never\n// acknowledge anything. It only renders a confirmation form; the POST below does the real work.\nconst q = $input.first().json.query || {};\nconst esc = (s) =>\n  String(s === undefined || s === null ? '' : s).replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' }[c]));\n\nconst html = `<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\n<title>Acknowledge incident alert</title>\n<style>\n  body{font-family:system-ui,Segoe UI,Arial,sans-serif;background:#f5f6f8;margin:0;display:flex;min-height:100vh;align-items:center;justify-content:center}\n  .card{background:#fff;border-radius:10px;box-shadow:0 2px 12px rgba(0,0,0,.1);padding:28px 32px;max-width:420px;width:90%}\n  h1{font-size:20px;margin:0 0 6px} p{color:#444;line-height:1.45} code{background:#eef;padding:2px 6px;border-radius:4px}\n  input[type=text]{width:100%;box-sizing:border-box;padding:9px;margin:6px 0 14px;border:1px solid #bbb;border-radius:6px}\n  button{background:#c0392b;color:#fff;border:0;border-radius:6px;padding:10px 18px;font-size:15px;cursor:pointer}\n</style></head><body><div class=\"card\">\n<h1>Acknowledge alert</h1>\n<p>Alert <code>${esc(q.key)}</code></p>\n<p>Acknowledging stops further reminders and escalation for this incident. It does not resolve the incident.</p>\n<form method=\"POST\" action=\"\">\n  <input type=\"hidden\" name=\"key\" value=\"${esc(q.key)}\">\n  <input type=\"hidden\" name=\"token\" value=\"${esc(q.token)}\">\n  <label>Your name (optional)<input type=\"text\" name=\"name\" maxlength=\"80\" autocomplete=\"name\"></label>\n  <button type=\"submit\">Acknowledge</button>\n</form></div></body></html>`;\n\nreturn [{ json: { html, status: 200 } }];\n"
+      },
+      "id": "a2",
+      "name": "Build Confirmation Page",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "={{ $json.html }}",
+        "options": {
+          "responseCode": "={{ $json.status }}",
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "text/html; charset=utf-8"
+              }
+            ]
+          }
+        }
+      },
+      "id": "a3",
+      "name": "Show Confirmation Page",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        440,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "servicenow-incident-ack",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "a4",
+      "name": "Ack Submitted (POST)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        0,
+        200
+      ],
+      "webhookId": "5d1f0c52-8a0e-4b1e-9c11-0a1b2c3d4e02"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "a5-0",
+              "name": "instanceUrl",
+              "value": "https://dev421307.service-now.com",
+              "type": "string"
+            },
+            {
+              "id": "a5-1",
+              "name": "writeBack",
+              "value": false,
+              "type": "boolean"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a5",
+      "name": "Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        220,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// POST body: key, token, name (form-encoded). Validate the shape before it touches the table.\n// Read the webhook request by node name: `Config` sits between the webhook and this node.\nconst item = $('Ack Submitted (POST)').first().json;\nconst b = item.body || {};\nconst q = item.query || {};\nconst key = String(b.key !== undefined ? b.key : q.key || '').trim();\nconst token = String(b.token !== undefined ? b.token : q.token || '').trim();\nconst name = String(b.name || '').trim().slice(0, 80) || 'email link';\n\nconst validKey = /^[A-Za-z0-9_-]{3,40}:(critical|high|stale)$/.test(key);\nconst validToken = /^[A-Za-z0-9-]{16,100}$/.test(token);\nreturn [{ json: { key, token, name, valid: validKey && validToken } }];\n"
+      },
+      "id": "a6",
+      "name": "Prepare Ack",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "row",
+        "operation": "get",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "servicenow_alert_state"
+        },
+        "matchType": "allConditions",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "dedup_key",
+              "condition": "eq",
+              "keyValue": "={{ $json.key }}"
+            },
+            {
+              "keyName": "ack_token",
+              "condition": "eq",
+              "keyValue": "={{ $json.token }}"
+            }
+          ]
+        },
+        "returnAll": true,
+        "options": {}
+      },
+      "id": "a7",
+      "name": "Find Alert Row",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        660,
+        200
+      ],
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// Decides the outcome of an acknowledgement request. The token is the per-alert secret stored in\n// the row, so the email link only ever works for the alert it was sent for - and a re-opened\n// incident gets a new token, so an old link cannot acknowledge the new occurrence.\nconst req = $('Prepare Ack').first().json;\nconst cfg = $('Config').first().json;\nconst rows = $input.all().map((i) => i.json);\nconst row = rows.find((r) => r && r.dedup_key === req.key && r.ack_token === req.token);\n\nconst fail = (status, message) => [{ json: { write: false, ok: false, status, message } }];\n\nif (!req.valid || !row) {\n  return fail(404, 'This acknowledgement link is invalid or has expired.');\n}\nif (row.status === 'resolved') {\n  return fail(410, `Alert ${row.dedup_key} is already resolved - there is nothing to acknowledge.`);\n}\nif (row.acked_at) {\n  return [{ json: { write: false, ok: true, status: 200, message: `Alert ${row.dedup_key} was already acknowledged by ${row.acked_by || 'someone'}.` } }];\n}\n\nlet sysId = '';\ntry {\n  sysId = (JSON.parse(row.payload || '{}') || {}).sysId || '';\n} catch (e) {\n  sysId = '';\n}\n\nreturn [\n  {\n    json: {\n      write: true,\n      ok: true,\n      status: 200,\n      message: `Alert ${row.dedup_key} acknowledged by ${req.name}. Reminders and escalation are stopped.`,\n      dedup_key: row.dedup_key,\n      version: Number(row.version) + 1, // bumping `version` makes any in-flight claim of this row lose its CAS\n      acked_at: new Date().toISOString(),\n      acked_by: req.name,\n      ack_source: 'email-link',\n      sysId,\n      writeBack: Boolean(cfg.writeBack),\n    },\n  },\n];\n"
+      },
+      "id": "a8",
+      "name": "Apply Ack",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "a9-c",
+              "leftValue": "={{ $json.write }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "a9",
+      "name": "Needs Write?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1100,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "row",
+        "operation": "update",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "servicenow_alert_state"
+        },
+        "matchType": "allConditions",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "dedup_key",
+              "condition": "eq",
+              "keyValue": "={{ $json.dedup_key }}"
+            },
+            {
+              "keyName": "version",
+              "condition": "eq",
+              "keyValue": "={{ $json.version - 1 }}"
+            }
+          ]
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "acked_at": "={{ $json.acked_at }}",
+            "acked_by": "={{ $json.acked_by }}",
+            "ack_source": "={{ $json.ack_source }}",
+            "version": "={{ $json.version }}"
+          },
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "a10",
+      "name": "Save Acknowledgement",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        1320,
+        0
+      ],
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "a11-c",
+              "leftValue": "={{ $('Apply Ack').first().json.writeBack && !!$('Apply Ack').first().json.sysId }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "a11",
+      "name": "Write Back To ServiceNow?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1540,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Work note written back to the ServiceNow incident (optional - needs write access on `incident`).\nconst p = $('Apply Ack').first().json;\nreturn [{ json: { sysId: p.sysId, note: `Alert ${p.dedup_key} acknowledged via n8n by ${p.acked_by} at ${p.acked_at}.` } }];\n"
+      },
+      "id": "a12",
+      "name": "Prepare Work Note",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1760,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $('Config').first().json.instanceUrl }}/api/now/table/incident/{{ $json.sysId }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ work_notes: $json.note }) }}",
+        "options": {}
+      },
+      "id": "a13",
+      "name": "Write Work Note",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1980,
+        0
+      ],
+      "onError": "continueRegularOutput",
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "",
+          "name": "ServiceNow Basic Auth"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Builds the HTML page shown after the POST. Reached either straight from \"Apply Ack\"\n// (nothing to write / rejected) or after the table update.\nconst plan = $('Apply Ack').first().json;\nconst esc = (s) => String(s === undefined || s === null ? '' : s).replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' }[c]));\n\nlet ok = plan.ok;\nlet status = plan.status;\nlet message = plan.message;\n\nif (plan.write) {\n  // After \"Save Acknowledgement\": the compare-and-swap returns the row only if it still matched.\n  const saved = $('Save Acknowledgement').all().some((i) => i.json && i.json.dedup_key === plan.dedup_key && i.json.acked_at);\n  if (!saved) {\n    ok = false;\n    status = 409;\n    message = 'The alert changed while you were acknowledging it. Please click the link in the email again.';\n  }\n}\n\nconst html = `<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\n<title>${ok ? 'Acknowledged' : 'Not acknowledged'}</title>\n<style>body{font-family:system-ui,Segoe UI,Arial,sans-serif;background:#f5f6f8;margin:0;display:flex;min-height:100vh;align-items:center;justify-content:center}\n.card{background:#fff;border-radius:10px;box-shadow:0 2px 12px rgba(0,0,0,.1);padding:28px 32px;max-width:440px;width:90%}\nh1{font-size:20px;margin:0 0 8px;color:${ok ? '#1e8449' : '#c0392b'}}p{color:#444;line-height:1.45}</style></head>\n<body><div class=\"card\"><h1>${ok ? 'Acknowledged' : 'Not acknowledged'}</h1><p>${esc(message)}</p></div></body></html>`;\n\nreturn [{ json: { html, status } }];\n"
+      },
+      "id": "a14",
+      "name": "Build Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2200,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "={{ $json.html }}",
+        "options": {
+          "responseCode": "={{ $json.status }}",
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "text/html; charset=utf-8"
+              }
+            ]
+          }
+        }
+      },
+      "id": "a15",
+      "name": "Show Result",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        2420,
+        200
+      ]
+    }
+  ],
+  "connections": {
+    "Ack Link Opened (GET)": {
+      "main": [
+        [
+          {
+            "node": "Build Confirmation Page",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Confirmation Page": {
+      "main": [
+        [
+          {
+            "node": "Show Confirmation Page",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ack Submitted (POST)": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config": {
+      "main": [
+        [
+          {
+            "node": "Prepare Ack",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Ack": {
+      "main": [
+        [
+          {
+            "node": "Find Alert Row",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find Alert Row": {
+      "main": [
+        [
+          {
+            "node": "Apply Ack",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Apply Ack": {
+      "main": [
+        [
+          {
+            "node": "Needs Write?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Needs Write?": {
+      "main": [
+        [
+          {
+            "node": "Save Acknowledgement",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save Acknowledgement": {
+      "main": [
+        [
+          {
+            "node": "Write Back To ServiceNow?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Write Back To ServiceNow?": {
+      "main": [
+        [
+          {
+            "node": "Prepare Work Note",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Work Note": {
+      "main": [
+        [
+          {
+            "node": "Write Work Note",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Write Work Note": {
+      "main": [
+        [
+          {
+            "node": "Build Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Response": {
+      "main": [
+        [
+          {
+            "node": "Show Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

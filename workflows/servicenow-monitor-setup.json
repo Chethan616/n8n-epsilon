@@ -1,0 +1,246 @@
+{
+  "name": "ServiceNow Monitor - Setup",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "s1",
+      "name": "When clicking 'Execute workflow'",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "table",
+        "operation": "create",
+        "tableName": "servicenow_alert_state",
+        "columns": {
+          "column": [
+            {
+              "name": "dedup_key",
+              "type": "string"
+            },
+            {
+              "name": "incident_number",
+              "type": "string"
+            },
+            {
+              "name": "alert_type",
+              "type": "string"
+            },
+            {
+              "name": "status",
+              "type": "string"
+            },
+            {
+              "name": "incident_state",
+              "type": "string"
+            },
+            {
+              "name": "payload",
+              "type": "string"
+            },
+            {
+              "name": "claim_id",
+              "type": "string"
+            },
+            {
+              "name": "claim_kind",
+              "type": "string"
+            },
+            {
+              "name": "claim_level",
+              "type": "number"
+            },
+            {
+              "name": "claimed_at",
+              "type": "date"
+            },
+            {
+              "name": "first_notified_at",
+              "type": "date"
+            },
+            {
+              "name": "last_notified_at",
+              "type": "date"
+            },
+            {
+              "name": "resolved_at",
+              "type": "date"
+            },
+            {
+              "name": "reminder_count",
+              "type": "number"
+            },
+            {
+              "name": "escalation_level",
+              "type": "number"
+            },
+            {
+              "name": "attempts",
+              "type": "number"
+            },
+            {
+              "name": "version",
+              "type": "number"
+            },
+            {
+              "name": "ack_token",
+              "type": "string"
+            },
+            {
+              "name": "acked_at",
+              "type": "date"
+            },
+            {
+              "name": "acked_by",
+              "type": "string"
+            },
+            {
+              "name": "ack_source",
+              "type": "string"
+            },
+            {
+              "name": "last_error",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {
+          "createIfNotExists": true
+        }
+      },
+      "id": "s2",
+      "name": "Create Alert State Table",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        220,
+        0
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "resource": "row",
+        "operation": "get",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "servicenow_alert_state"
+        },
+        "matchType": "allConditions",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "dedup_key",
+              "condition": "eq",
+              "keyValue": "__run_lock__"
+            }
+          ]
+        },
+        "returnAll": true,
+        "options": {}
+      },
+      "id": "s3",
+      "name": "Read Lock Row",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        440,
+        0
+      ],
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// One-time setup: emit the run-lock row only if it does not exist yet, so re-running Setup is safe.\nconst existing = $input.all().some((i) => i.json && i.json.dedup_key === '__run_lock__');\nif (existing) return [];\nreturn [\n  {\n    json: {\n      dedup_key: '__run_lock__',\n      status: 'lock',\n      claim_id: null,\n      claimed_at: '1970-01-01T00:00:00.000Z',\n      version: 1,\n    },\n  },\n];\n"
+      },
+      "id": "s4",
+      "name": "Prepare Lock Row",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "row",
+        "operation": "insert",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "servicenow_alert_state"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": null,
+          "matchingColumns": [],
+          "schema": []
+        }
+      },
+      "id": "s5",
+      "name": "Insert Lock Row",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        880,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "When clicking 'Execute workflow'": {
+      "main": [
+        [
+          {
+            "node": "Create Alert State Table",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Alert State Table": {
+      "main": [
+        [
+          {
+            "node": "Read Lock Row",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Lock Row": {
+      "main": [
+        [
+          {
+            "node": "Prepare Lock Row",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Lock Row": {
+      "main": [
+        [
+          {
+            "node": "Insert Lock Row",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

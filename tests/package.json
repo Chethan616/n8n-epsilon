@@ -1,0 +1,10 @@
+{
+  "name": "n8n-epsilon-tests",
+  "private": true,
+  "description": "Unit + end-to-end reliability tests for the ServiceNow Incident Monitor. No npm install needed: the e2e suite reuses the sqlite3/mailparser packages that ship inside the n8n install.",
+  "scripts": {
+    "test": "npm run test:unit && npm run test:e2e",
+    "test:unit": "node --test unit/",
+    "test:e2e": "node run-e2e.js"
+  }
+}

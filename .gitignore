@@ -18,3 +18,8 @@ Thumbs.db
 *.log
 node_modules/
 ~$*
+
+# test run artefacts
+tests/last-run.json
+tests/e2e-output.txt
+__pycache__/

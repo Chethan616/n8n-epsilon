@@ -77,3 +77,24 @@ Slide 6 wording to use in the deck once this ships: *"Alert state is claimed as 
 3. Wire into the real workflow, test against the live dev instance.
 4. Gmail SMTP credential + real send test.
 5. Full test matrix, then update docs and the deck.
+
+## 6. Review feedback follow-up (2026-11-17)
+
+Reviewer feedback and the response are in [`docs/feedback-response.md`](docs/feedback-response.md).
+
+| Task | Owner | Status |
+|---|---|---|
+| Evaluate a database instead of workflow static data; implement it | Chethan | Done — n8n Data Table `servicenow_alert_state`, version-guarded compare-and-swap writes; evaluation in `docs/state-store-evaluation.md` |
+| Concurrency + failure-scenario tests (concurrent runs, ServiceNow/SMTP failures, crash mid-send) | Chethan | Done against a mock ServiceNow + SMTP sink on a real n8n — see `docs/test-results.md` |
+| API pagination beyond 200 records | Chethan | Done — offset paging, `pageSize` / `maxPages` config, cap fails the run |
+| Acknowledgement + escalation | Chethan | Done — ack webhook (link + auto-ack), two escalation levels |
+| `resolved` status / fresh cycle on reopen (was described in section 1 above, never implemented) | Chethan | Done |
+| Live run against the real ServiceNow PDI + real Gmail (the mock tests do not cover ServiceNow's Basic-Auth restriction or Gmail limits) | Shared | Still to do — same blockers as section 4 |
+| Error workflow delivery to a real inbox | **Sanjna** | Verified against the SMTP sink (admin email arrives); still to do with real Gmail |
+| Decide whether to move state to Postgres (multi-worker / hard unique key) | Shared | Open — only needed if n8n runs in queue mode |
+| Retention job for `resolved` rows | Shared | Open, low priority |
+
+Things the test suite found that changed the design (all fixed, each now has a test): n8n re-runs the
+*whole* batch when a multi-item node with retry-on-fail has one failing item (so the email node has no
+node-level retry); an HTTP error on a page in the middle of pagination was returned as data; the ack
+endpoint read its request from the wrong node.

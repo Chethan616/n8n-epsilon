@@ -14,12 +14,18 @@ ignored:
 
 0) SETUP — run this once per PowerShell window
 --------------------------------------------------
-Loads SERVICENOW_INSTANCE_URL / SERVICENOW_USERNAME / SERVICENOW_PASSWORD
+First, cd into the project folder (wherever you unzipped/cloned it):
+
+  cd path\to\n8n-epsilon
+
+Then load SERVICENOW_INSTANCE_URL / SERVICENOW_USERNAME / SERVICENOW_PASSWORD
 from .env into this session's environment variables. Variables set this way
 persist for the rest of this PowerShell window (but not in a new one — run
-this again if you open a fresh terminal).
+this again if you open a fresh terminal). This uses a relative path (.env,
+not a hardcoded drive letter) so it works regardless of where the project
+lives on this machine:
 
-  Get-Content D:\epn8n\.env | ForEach-Object {
+  Get-Content .env | ForEach-Object {
       if ($_ -match '^([A-Za-z_][A-Za-z0-9_]*)=(.*)$') {
           [System.Environment]::SetEnvironmentVariable($matches[1], $matches[2])
       }
